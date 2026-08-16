@@ -542,13 +542,13 @@ def test_matched_caller_gets_personalized_greeting(monkeypatch):
     r = client.post("/voice", data={"From": "+15035550134"})
     assert r.status_code == 200
     assert "Hi Jane," in r.text  # personalized welcomeGreeting
-    assert "Who's this?" not in r.text  # generic opener dropped
+    assert "Who is this" not in r.text  # generic opener dropped
 
 
 def test_unknown_caller_gets_generic_greeting(monkeypatch):
     monkeypatch.setattr(contacts, "_index", {"5035550134": "Jane Doe"})
     r = client.post("/voice", data={"From": "+15039999999"})
-    assert "Who's this?" in r.text  # falls back to the generic greeting
+    assert "Who is this" in r.text  # falls back to the generic greeting
 
 
 def test_setup_threads_matched_name_into_system_prompt(monkeypatch):

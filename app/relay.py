@@ -38,11 +38,10 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from app import contacts, llm, messages, notify
 from app.config import settings
-from app.prompts import greeting, system_prompt
+from app.prompts import END_MARKER, greeting, system_prompt
 
 logger = logging.getLogger("relay")
 
-END_MARKER = "[[END]]"
 # Withhold a little more than the marker itself, so a marker followed by a
 # stray newline or space is still caught whole instead of half-spoken.
 TAIL = len(END_MARKER) + 4

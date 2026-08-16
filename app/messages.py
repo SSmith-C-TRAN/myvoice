@@ -11,14 +11,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 from app import llm
-
-_EXTRACT_SYSTEM = (
-    "You extract a phone message from a transcript between a caller and Steve's "
-    "receptionist. Pull the caller's name, the best callback number, the reason "
-    "they called, and how urgent it is. Use null for a field the caller never "
-    "gave. Judge urgency from the caller's words: high for time-sensitive or "
-    "emergency matters, low for casual or FYI calls, normal otherwise."
-)
+from app.prompts import EXTRACT_SYSTEM
 
 
 class Extracted(BaseModel):
@@ -66,7 +59,7 @@ async def capture(
         return None
 
     transcript = _render_transcript(history)
-    extracted = await llm.extract(_EXTRACT_SYSTEM, transcript, Extracted)
+    extracted = await llm.extract(EXTRACT_SYSTEM, transcript, Extracted)
     return Message(
         caller_name=matched_name or extracted.caller_name,
         callback_number=extracted.callback_number,
