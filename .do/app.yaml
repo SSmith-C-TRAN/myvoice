@@ -20,6 +20,10 @@ services:
         value: "sparkal.ai"
       - key: LLM_PRIMARY
         value: "claude-haiku-4-5"
+      - key: TTS_PROVIDER
+        value: "Google"
+      - key: TTS_VOICE
+        value: "en-US-Journey-F"
       - key: NOTIFY_SMS_TO
         value: "+18084649192"
       - key: ANTHROPIC_API_KEY

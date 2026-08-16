@@ -65,6 +65,8 @@ Copy `.env.example` to `.env`. Steps 1–2 only need:
 | `FORWARD_TO_NUMBER`| `+18084649192` | Your cell, E.164. Rings first.         |
 | `DIAL_TIMEOUT`     | `15`           | Seconds before falling through to bot. |
 | `PUBLIC_DOMAIN`    | `sparkal.ai`   | Public host; baked into the `wss://` relay URL. Restart on change. |
+| `TTS_PROVIDER`     | `Google`       | Twilio TTS provider: `Google`, `Amazon`, or `ElevenLabs` (key required in Console). |
+| `TTS_VOICE`        | `en-US-Journey-F` | Voice ID for the provider. Baked into TwiML — restart on change. |
 | `ANTHROPIC_API_KEY`| —              | Required from step 4 on for the bot to talk.          |
 | `LLM_PRIMARY`      | `claude-haiku-4-5` | Voice model. Reasoning stays off for low latency. |
 | `LLM_MAX_TOKENS`   | `200`          | Cap per reply — replies are spoken, so keep them short. |

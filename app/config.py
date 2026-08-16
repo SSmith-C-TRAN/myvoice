@@ -8,21 +8,19 @@ class Settings(BaseSettings):
     forward_to_number: str = "+18084649192"  # your cell, E.164
     dial_timeout: int = 15  # seconds — must beat carrier voicemail
 
-    # Public host App Platform serves on, e.g. firstsignal-voice-xxxxx.ondigitalocean.app.
-    # Baked into the relay's wss:// URL, so a change needs a restart.
     public_domain: str = "sparkal.ai"
 
-    # LLM (step 4). Reasoning stays off — Haiku 4.5 does no thinking unless asked,
-    # which is exactly what real-time voice needs.
+    tts_provider: str = "Google"
+    tts_voice: str = "en-US-Journey-F"
+
     anthropic_api_key: str = ""
     llm_primary: str = "claude-haiku-4-5"
     llm_max_tokens: int = 200  # replies are spoken, so keep them short
 
-    # Notify (step 5). Text the message summary to your cell via Twilio.
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""
     twilio_from_number: str = ""  # your Twilio number, E.164 — must be SMS-capable
-    notify_sms_to: str = "+18084649192"
+    notify_sms_to: str = ""
 
 
 settings = Settings()

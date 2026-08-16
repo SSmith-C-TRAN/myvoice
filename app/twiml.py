@@ -17,20 +17,23 @@ def hangup() -> str:
     return '<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>'
 
 
-def connect_relay(public_domain: str, greeting: str) -> str:
+def connect_relay(
+    public_domain: str, greeting: str, tts_provider: str, tts_voice: str
+) -> str:
     """Hand the caller to the ConversationRelay bot over a WebSocket.
 
     The bot speaks `greeting` first (no dead air) and the caller's number is
     passed through as a <Parameter>, arriving in the setup message's
-    customParameters. Uses Twilio's default STT/TTS providers — no extra
-    console setup needed for the echo test.
+    customParameters. `tts_provider`/`tts_voice` pick the spoken voice —
+    ElevenLabs additionally needs an API key configured in the Twilio Console.
     """
     return (
         '<?xml version="1.0" encoding="UTF-8"?>'
         "<Response>"
         '<Connect action="/voice/handoff">'
         f'<ConversationRelay url="wss://{public_domain}/ws" '
-        f'welcomeGreeting="{greeting}">'
+        f'welcomeGreeting="{greeting}" '
+        f'ttsProvider="{tts_provider}" voice="{tts_voice}">'
         '<Parameter name="from" value="{{From}}"/>'
         "</ConversationRelay>"
         "</Connect>"

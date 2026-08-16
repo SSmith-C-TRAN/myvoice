@@ -40,6 +40,8 @@ def test_after_dial_no_answer_connects_relay():
     assert "<ConversationRelay" in r.text
     assert 'url="wss://' in r.text
     assert 'action="/voice/handoff"' in r.text
+    assert f'ttsProvider="{settings.tts_provider}"' in r.text
+    assert f'voice="{settings.tts_voice}"' in r.text
 
 
 def test_handoff_hangs_up():

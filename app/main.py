@@ -34,7 +34,14 @@ def after_dial(DialCallStatus: str = Form(...)) -> Response:
     caller reached no one, so hand off to the message bot (placeholder for now)."""
     if DialCallStatus == "completed":
         return twiml(hangup())
-    return twiml(connect_relay(settings.public_domain, GREETING))
+    return twiml(
+        connect_relay(
+            settings.public_domain,
+            GREETING,
+            settings.tts_provider,
+            settings.tts_voice,
+        )
+    )
 
 
 @app.websocket("/ws")
