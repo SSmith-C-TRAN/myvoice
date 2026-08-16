@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
 
-from app import llm, main, messages, notify, relay
+from app import contacts, llm, messages, notify, relay
 from app.config import settings
 from app.main import app
 from app.messages import Extracted, Message
@@ -74,7 +74,7 @@ def _stub_capture_and_notify(monkeypatch):
     """Keep the disconnect/finalize path offline. Returns the sent-SMS list."""
     sent: list[str] = []
 
-    async def fake_capture(history, call_sid, from_number):
+    async def fake_capture(history, call_sid, from_number, matched_name=None):
         return None
 
     async def fake_send_sms(body):
@@ -372,7 +372,8 @@ def test_caller_gets_full_thinking_time_after_the_bot_stops(monkeypatch):
         assert ws.receive_json()["token"] == relay.STILL_THERE
         waited = time.monotonic() - started
 
-    playback = relay.speech_seconds(main.GREETING)
+    # Unknown caller (empty customParameters) → the generic greeting is seeded.
+    playback = relay.speech_seconds(relay.greeting(None))
     thinking = waited - playback
     assert thinking >= 0.45, f"only {thinking:.2f}s to answer, expected ~0.5s"
 
@@ -499,3 +500,96 @@ def test_build_summary_formats_fields():
     assert "Urgency: high" in body
     assert "Callback: +15035550134" in body
     assert "Caller: hi" in body  # transcript included
+
+
+# --- Contacts (CRM-lite) ---------------------------------------------------
+
+
+def test_normalize_collapses_formats():
+    """Every common way of writing a US number lands on the same key."""
+    key = contacts.normalize("+15035550134")
+    assert key == "5035550134"
+    for variant in ["(503) 555-0134", "503-555-0134", "15035550134", "503.555.0134"]:
+        assert contacts.normalize(variant) == key
+
+
+def test_normalize_rejects_junk():
+    assert contacts.normalize(None) is None
+    assert contacts.normalize("") is None
+    assert contacts.normalize("hello") is None
+    assert contacts.normalize("12345") is None  # too few digits
+
+
+def test_load_and_lookup(tmp_path, monkeypatch):
+    csv_file = tmp_path / "contacts.csv"
+    csv_file.write_text(
+        "name,phone\nJane Doe,+15035550134\nAcme Plumbing,(503) 555-0142\n"
+    )
+    assert contacts.load(str(csv_file)) == 2
+    assert contacts.lookup("+15035550134") == "Jane Doe"
+    assert contacts.lookup("5035550142") == "Acme Plumbing"  # matches any format
+    assert contacts.lookup("+15039999999") is None  # unknown number
+
+
+def test_load_missing_file_is_graceful(tmp_path):
+    assert contacts.load(str(tmp_path / "nope.csv")) == 0
+    assert contacts.lookup("+15035550134") is None
+
+
+def test_matched_caller_gets_personalized_greeting(monkeypatch):
+    """A known caller ID leads the spoken greeting with their first name."""
+    monkeypatch.setattr(contacts, "_index", {"5035550134": "Jane Doe"})
+    r = client.post("/voice", data={"From": "+15035550134"})
+    assert r.status_code == 200
+    assert "Hi Jane," in r.text  # personalized welcomeGreeting
+    assert "Who's this?" not in r.text  # generic opener dropped
+
+
+def test_unknown_caller_gets_generic_greeting(monkeypatch):
+    monkeypatch.setattr(contacts, "_index", {"5035550134": "Jane Doe"})
+    r = client.post("/voice", data={"From": "+15039999999"})
+    assert "Who's this?" in r.text  # falls back to the generic greeting
+
+
+def test_setup_threads_matched_name_into_system_prompt(monkeypatch):
+    """A matched caller's name reaches the LLM's system prompt for the call."""
+    _stub_capture_and_notify(monkeypatch)
+    monkeypatch.setattr(contacts, "_index", {"5035550134": "Jane Doe"})
+    seen = {}
+
+    async def fake_stream(system, messages_):
+        seen["system"] = system
+        yield "Sure thing."
+
+    monkeypatch.setattr(llm, "stream_reply", fake_stream)
+
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json(
+            {
+                "type": "setup",
+                "callSid": "CA123",
+                "customParameters": {"from": "+15035550134"},
+            }
+        )
+        ws.send_json({"type": "prompt", "voicePrompt": "it's about Saturday"})
+        while not ws.receive_json()["last"]:
+            pass
+
+    assert "Jane Doe" in seen["system"]
+
+
+def test_capture_prefers_matched_name_over_extracted(monkeypatch):
+    async def fake_extract(system, user, schema):
+        return Extracted(
+            caller_name="Janey",  # what the LLM heard
+            callback_number="+15035550134",
+            reason="Saturday pickup",
+            urgency="normal",
+        )
+
+    monkeypatch.setattr(llm, "extract", fake_extract)
+    history = [{"role": "user", "content": "hi it's me"}]
+    msg = asyncio.run(
+        messages.capture(history, "CA9", "+15035550134", matched_name="Jane Doe")
+    )
+    assert msg.caller_name == "Jane Doe"  # contact match wins

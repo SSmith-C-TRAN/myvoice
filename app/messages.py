@@ -52,16 +52,26 @@ def _render_transcript(history: list[dict[str, str]]) -> str:
 
 
 async def capture(
-    history: list[dict[str, str]], call_sid: str, from_number: str | None
+    history: list[dict[str, str]],
+    call_sid: str,
+    from_number: str | None,
+    matched_name: str | None = None,
 ) -> Message | None:
-    """Extract a Message from the conversation, or None if nothing was said."""
+    """Extract a Message from the conversation, or None if nothing was said.
+
+    A `matched_name` from the contacts lookup (reliable, from caller ID) wins
+    over the name the LLM guesses from the transcript.
+    """
     if not any(turn["role"] == "user" for turn in history):
         return None
 
     transcript = _render_transcript(history)
     extracted = await llm.extract(_EXTRACT_SYSTEM, transcript, Extracted)
     return Message(
-        **extracted.model_dump(),
+        caller_name=matched_name or extracted.caller_name,
+        callback_number=extracted.callback_number,
+        reason=extracted.reason,
+        urgency=extracted.urgency,
         from_number=from_number,
         transcript=transcript,
         call_sid=call_sid,

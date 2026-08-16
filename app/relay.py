@@ -36,9 +36,9 @@ import time
 
 from fastapi import WebSocket, WebSocketDisconnect
 
-from app import llm, messages, notify
+from app import contacts, llm, messages, notify
 from app.config import settings
-from app.prompts import GREETING, system_prompt
+from app.prompts import greeting, system_prompt
 
 logger = logging.getLogger("relay")
 
@@ -101,6 +101,7 @@ class Session:
         self.turn: asyncio.Task | None = None
         self.call_sid: str | None = None
         self.from_number: str | None = None
+        self.caller_name: str | None = None  # resolved from contacts at setup
         self.finalized = False
         self.last_activity = time.monotonic()
         self.nudged = False  # already asked "are you still there?"
@@ -392,12 +393,17 @@ async def finalize(session: Session) -> None:
     session.finalized = True
     try:
         msg = await messages.capture(
-            session.history, session.call_sid, session.from_number
+            session.history,
+            session.call_sid,
+            session.from_number,
+            session.caller_name,
         )
         if msg:
             await notify.send_sms(notify.build_summary(msg))
         else:
             who = session.from_number or "unknown"
+            if session.caller_name:
+                who = f"{who} ({session.caller_name})"
             await notify.send_sms(f"Missed call from {who} — no message left.")
     except Exception:
         logger.exception("finalize failed for call=%s", session.call_sid)
@@ -453,16 +459,21 @@ async def handle_relay(ws: WebSocket) -> None:
             if msg_type == "setup":
                 session.call_sid = msg.get("callSid")
                 session.from_number = msg.get("customParameters", {}).get("from")
-                session.system = system_prompt(session.from_number)
+                session.caller_name = contacts.lookup(session.from_number)
+                session.system = system_prompt(
+                    session.from_number, session.caller_name
+                )
                 # Twilio speaks the welcome greeting from the TwiML attribute,
                 # so its tokens never pass through here. Seed the fallback
                 # estimate with it by hand, or a call with no speaker events
-                # counts the greeting as the caller sitting silent.
-                session.speech_sent(GREETING)
+                # counts the greeting as the caller sitting silent. Use the same
+                # (possibly personalized) greeting the caller actually heard.
+                session.speech_sent(greeting(session.caller_name))
                 logger.info(
-                    "relay setup: call=%s from=%s",
+                    "relay setup: call=%s from=%s name=%s",
                     session.call_sid,
                     session.from_number,
+                    session.caller_name,
                 )
 
             elif msg_type == "prompt":

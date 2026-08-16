@@ -1,11 +1,13 @@
 import logging
 import sys
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Form, WebSocket
 from fastapi.responses import PlainTextResponse, Response
 
+from app import contacts
 from app.config import settings
-from app.prompts import GREETING
+from app.prompts import greeting
 from app.relay import handle_relay
 from app.twiml import connect_relay, dial_then_bot, hangup
 
@@ -20,7 +22,14 @@ logging.basicConfig(
     stream=sys.stdout,
 )
 
-app = FastAPI(title="firstsignal-voice")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Load contacts once at boot so a bad CSV surfaces here, not mid-call.
+    contacts.load(settings.contacts_file)
+    yield
+
+
+app = FastAPI(title="firstsignal-voice", lifespan=lifespan)
 
 
 def twiml(body: str) -> Response:
@@ -28,11 +37,13 @@ def twiml(body: str) -> Response:
 
 
 def bot_answers(caller_id: str = "") -> Response:
-    """Hand the caller straight to the message bot."""
+    """Hand the caller straight to the message bot. If caller ID matches a known
+    contact, the spoken greeting leads with their name."""
+    name = contacts.lookup(caller_id)
     return twiml(
         connect_relay(
             settings.public_domain,
-            GREETING,
+            greeting(name),
             settings.tts_provider,
             settings.tts_voice,
             caller_id,

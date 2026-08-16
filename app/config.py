@@ -20,6 +20,11 @@ class Settings(BaseSettings):
 
     public_domain: str = "sparkal.ai"
 
+    # Contacts CSV (name,phone) baked into the image and loaded at startup, so
+    # a matched caller ID can be greeted by name. Lives under app/ so the
+    # Dockerfile's `COPY app ./app` ships it. Update = edit the file, git push.
+    contacts_file: str = "app/data/contacts.csv"
+
     # INFO gives you a line per turn plus a summary per call. DEBUG adds every
     # unrecognized inbound WebSocket message, which is how you'd inspect a
     # Twilio event this code doesn't handle yet.
