@@ -21,9 +21,11 @@ def test_healthz():
 
 def test_voice_bot_answers_immediately():
     """Default mode: the carrier already rang the cell, so pick up now."""
-    r = client.post("/voice")
+    r = client.post("/voice", data={"From": "+15035550134"})
     assert r.status_code == 200
     assert "<ConversationRelay" in r.text
+    assert '<Parameter name="from" value="+15035550134"/>' in r.text
+    assert "{{From}}" not in r.text
     assert "<Dial" not in r.text
 
 
@@ -46,11 +48,15 @@ def test_after_dial_completed_hangs_up():
 
 
 def test_after_dial_no_answer_connects_relay():
-    r = client.post("/voice/after-dial", data={"DialCallStatus": "no-answer"})
+    r = client.post(
+        "/voice/after-dial",
+        data={"DialCallStatus": "no-answer", "From": "+15035550134"},
+    )
     assert r.status_code == 200
     assert "<ConversationRelay" in r.text
     assert 'url="wss://' in r.text
     assert 'action="/voice/handoff"' in r.text
+    assert '<Parameter name="from" value="+15035550134"/>' in r.text
     assert f'ttsProvider="{settings.tts_provider}"' in r.text
     assert f'voice="{settings.tts_voice}"' in r.text
     # Load-bearing: without the subscription Twilio never sends the speaker

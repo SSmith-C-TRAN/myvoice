@@ -22,6 +22,7 @@ def connect_relay(
     greeting: str,
     tts_provider: str,
     tts_voice: str,
+    caller_id: str = "",
     events: str = "speaker-events",
 ) -> str:
     """Hand the caller to the ConversationRelay bot over a WebSocket.
@@ -44,7 +45,7 @@ def connect_relay(
         f'welcomeGreeting="{greeting}" '
         f'ttsProvider="{tts_provider}" voice="{tts_voice}" '
         f'events="{events}">'
-        '<Parameter name="from" value="{{From}}"/>'
+        f'<Parameter name="from" value="{caller_id}"/>'
         "</ConversationRelay>"
         "</Connect>"
         "</Response>"

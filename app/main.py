@@ -27,7 +27,7 @@ def twiml(body: str) -> Response:
     return Response(content=body, media_type="application/xml")
 
 
-def bot_answers() -> Response:
+def bot_answers(caller_id: str = "") -> Response:
     """Hand the caller straight to the message bot."""
     return twiml(
         connect_relay(
@@ -35,6 +35,7 @@ def bot_answers() -> Response:
             GREETING,
             settings.tts_provider,
             settings.tts_voice,
+            caller_id,
             settings.relay_events,
         )
     )
@@ -46,7 +47,7 @@ def healthz() -> PlainTextResponse:
 
 
 @app.post("/voice")
-def voice() -> Response:
+def voice(From: str = Form("")) -> Response:
     """The number's voice webhook.
 
     In "bot" mode the assistant picks up right away — the caller already rang
@@ -56,16 +57,16 @@ def voice() -> Response:
     """
     if settings.answer_mode == "dial-first":
         return twiml(dial_then_bot(settings.forward_to_number, settings.dial_timeout))
-    return bot_answers()
+    return bot_answers(From)
 
 
 @app.post("/voice/after-dial")
-def after_dial(DialCallStatus: str = Form(...)) -> Response:
+def after_dial(DialCallStatus: str = Form(...), From: str = Form("")) -> Response:
     """Dial leg ended ("dial-first" mode only). 'completed' means the cell took
     the call — otherwise the caller reached no one, so hand off to the bot."""
     if DialCallStatus == "completed":
         return twiml(hangup())
-    return bot_answers()
+    return bot_answers(From)
 
 
 @app.websocket("/ws")
