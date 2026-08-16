@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
 
-from app import contacts, llm, messages, notify, relay
+from app import contacts, llm, messages, notify, prompts, relay
 from app.config import settings
 from app.main import app
 from app.messages import Extracted, Message
@@ -549,6 +549,20 @@ def test_unknown_caller_gets_generic_greeting(monkeypatch):
     monkeypatch.setattr(contacts, "_index", {"5035550134": "Jane Doe"})
     r = client.post("/voice", data={"From": "+15039999999"})
     assert "Who is this" in r.text  # falls back to the generic greeting
+
+
+def test_caller_id_reaches_the_prompt_in_spoken_form():
+    """E.164 never reaches the model — read back verbatim it becomes "plus one"."""
+    assert prompts.spoken_number("+15035550134") == "503-555-0134"
+    assert prompts.spoken_number("15035550134") == "503-555-0134"
+    assert prompts.spoken_number("(503) 555-0134") == "503-555-0134"
+    # Not a plain US number: left alone rather than reshaped to fit.
+    assert prompts.spoken_number("+442079460958") == "+442079460958"
+    assert prompts.spoken_number("12345") == "12345"
+
+    prompt = prompts.system_prompt("+15035550134", "Jane Doe")
+    assert "503-555-0134" in prompt
+    assert "+1" not in prompt
 
 
 def test_setup_threads_matched_name_into_system_prompt(monkeypatch):

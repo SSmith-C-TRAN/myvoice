@@ -30,6 +30,27 @@ def spoken_name(name: str) -> str:
     return name.split()[0]
 
 
+def spoken_number(number: str) -> str:
+    """Caller ID the way a person would say it.
+
+    Twilio hands us E.164 ("+15035550134"), and a model told to read that back
+    says "plus one" — nobody offering their own number says the country code.
+    Grouping the digits US-style gets it spoken the way it's heard.
+
+    Deliberately stricter than `contacts.normalize`, which takes the last ten
+    digits of anything long enough. That's the right rule for a lookup key and
+    the wrong one here: it would reshape a +44 number into a US pattern it
+    doesn't fit. So anything that isn't plainly a US number — an international
+    caller, a short code — is left exactly as it came in.
+    """
+    digits = "".join(c for c in number if c.isdigit())
+    if len(digits) == 11 and digits.startswith("1"):
+        digits = digits[1:]
+    if len(digits) != 10:
+        return number
+    return f"{digits[:3]}-{digits[3:6]}-{digits[6:]}"
+
+
 def greeting(caller_name: str | None = None) -> str:
     """The line Twilio speaks before the model gets a turn.
 
@@ -51,7 +72,11 @@ def greeting(caller_name: str | None = None) -> str:
 
 def _checklist(caller_number: str | None, caller_name: str | None) -> str:
     """The three things a message needs, with anything caller ID already
-    settled marked done rather than described in a separate paragraph."""
+    settled marked done rather than described in a separate paragraph.
+
+    `caller_number` arrives already in spoken form — the model reads back
+    whatever we show it, so E.164 never appears in the prompt at all.
+    """
     if caller_name:
         name_step = (
             f"**Their name — already known: {caller_name}.** Skip it. Never ask "
@@ -94,13 +119,16 @@ def system_prompt(
 ) -> str:
     """The instructions for one call."""
     known = caller_name or "unknown — the greeting asked, so their answer is coming"
+    # Convert once, here, so every place the number reaches the model is the
+    # form we want spoken.
+    number = spoken_number(caller_number) if caller_number else None
 
     return f"""You are {ASSISTANT_NAME}, {PRINCIPAL}'s assistant, answering his \
 phone when he can't. Take a clear message and make the caller feel looked \
 after. Be warm, friendly, and brief.
 
 # What you already know
-- Caller ID: {caller_number or "not available"}
+- Caller ID: {number or "not available"}
 - Who's calling: {known}
 - They have already heard you say: "{greeting(caller_name)}"
 
@@ -113,7 +141,7 @@ Work this list in order, one item per turn. If they volunteer something early, \
 take it and cross it off — never ask for what you already have. When all three \
 are filled in, say goodbye and end the call.
 
-{_checklist(caller_number, caller_name)}
+{_checklist(number, caller_name)}
 
 # How you talk
 It's a phone call, so keep it short and natural.
