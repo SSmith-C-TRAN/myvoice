@@ -16,7 +16,7 @@ class Settings(BaseSettings):
 
     # Only used in "dial-first" mode.
     forward_to_number: str = "+18084649192"  # your cell, E.164
-    dial_timeout: int = 15  # seconds — must beat carrier voicemail
+    dial_timeout: int = 5  # seconds — must beat carrier voicemail
 
     public_domain: str = "sparkal.ai"
 
@@ -39,11 +39,11 @@ class Settings(BaseSettings):
     # Fallback bound only. Normally the goodbye's agentSpeaking=off event tells
     # us playback finished and we hang up right then; this caps the wait in
     # case that event never arrives. Not a delay we expect callers to hear.
-    end_grace_seconds: float = 8.0
+    end_grace_seconds: float = 10.0
 
     anthropic_api_key: str = ""
     llm_primary: str = "claude-haiku-4-5"
-    llm_max_tokens: int = 200  # replies are spoken, so keep them short
+    llm_max_tokens: int = 1000  # replies are spoken, so keep them short
 
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""
