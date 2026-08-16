@@ -38,7 +38,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from app import llm, messages, notify
 from app.config import settings
-from app.prompts import system_prompt
+from app.prompts import GREETING, system_prompt
 
 logger = logging.getLogger("relay")
 
@@ -75,6 +75,22 @@ SPEAKING_POLL_SECONDS = 2.0
 MAX_AGENT_SPEECH_SECONDS = 180.0
 MAX_CALLER_SPEECH_SECONDS = 90.0
 
+# Rough speaking rate, deliberately on the slow side so the estimate errs
+# toward patience. This is a *fallback only*, used on calls where the speaker
+# events never arrive — the first agent event switches it off permanently.
+#
+# Estimating playback was the original bug, so it's worth being precise about
+# what changed: the old code applied an estimate to the welcome greeting alone
+# and gave replies no playback allowance at all, so the clock started the
+# instant generation ended and the nudge landed over the bot's own answer.
+# Covering every utterance is what that code should have done. It's still only
+# a guess, which is why real events beat it whenever they show up.
+SPEECH_CHARS_PER_SEC = 12.0
+
+
+def speech_seconds(text: str) -> float:
+    return len(text) / SPEECH_CHARS_PER_SEC
+
 
 class Session:
     """In-memory state for one call."""
@@ -100,6 +116,14 @@ class Session:
         # Twilio new tokens. end_call waits on it so a goodbye plays in full.
         self._agent_stopped = asyncio.Event()
 
+        # Fallback for calls where the speaker events never show up: when we
+        # think the tokens we've sent will have finished being spoken. Dead
+        # weight on a call that reports its events, and switched off for good
+        # by the first one that does.
+        self.saw_speaker_events = False
+        self._speech_estimate_until = 0.0
+        self.nudges = 0  # for the end-of-call diagnostic
+
     def cancel_turn(self) -> None:
         if self.turn and not self.turn.done():
             self.turn.cancel()
@@ -108,21 +132,43 @@ class Session:
         """A reply is still being streamed out of the LLM."""
         return self.turn is not None and not self.turn.done()
 
+    def maybe_playing(self) -> bool:
+        """True while we *estimate* TTS is still going. Only consulted on calls
+        that never sent a speaker event; otherwise the events know better."""
+        if self.saw_speaker_events:
+            return False
+        return time.monotonic() < self._speech_estimate_until
+
     def idle(self) -> bool:
         """Nobody is speaking and nothing is being generated — the only state
         in which quiet actually means the caller has gone quiet."""
-        return not (self.agent_speaking or self.caller_speaking or self.generating())
+        return not (
+            self.agent_speaking
+            or self.caller_speaking
+            or self.generating()
+            or self.maybe_playing()
+        )
 
     def touch(self) -> None:
         """Restart the silence clock from now."""
         self.last_activity = time.monotonic()
 
-    def speech_sent(self) -> None:
+    def speech_sent(self, text: str = "") -> None:
         """We just handed Twilio tokens to speak. Any earlier agent-stop is
         stale now, and the clock restarts — TTS is about to begin, and there's
-        a beat before agentSpeaking=on arrives to cover it for us."""
+        a beat before agentSpeaking=on arrives to cover it for us.
+
+        `text` extends the fallback playback estimate. Each chunk pushes the
+        estimated finish further out, from now if the last estimate has already
+        run out, so a reply streamed in twenty pieces still adds up to one
+        continuous stretch of speech.
+        """
         self._agent_stopped.clear()
         self.touch()
+        if text:
+            now = time.monotonic()
+            start = max(now, self._speech_estimate_until)
+            self._speech_estimate_until = start + speech_seconds(text)
 
     def set_agent_speaking(self, speaking: bool) -> None:
         self.agent_speaking = speaking
@@ -166,12 +212,8 @@ class Session:
             )
             self.set_caller_speaking(False)
 
-    def next_wakeup(self) -> float:
-        """How long the loop may sleep before it needs to look at the clock."""
-        self._expire_stale_flags()
-        self.settle()
-        if not self.idle():
-            return SPEAKING_POLL_SECONDS
+    def quiet_remaining(self) -> float:
+        """Idle seconds still owed before the next silence action is due."""
         allowance = (
             settings.silence_hangup_seconds
             if self.nudged
@@ -179,9 +221,40 @@ class Session:
         )
         return max(0.0, allowance - (time.monotonic() - self.last_activity))
 
+    def next_wakeup(self) -> float:
+        """How long the loop may sleep before it needs to look at the clock."""
+        self._expire_stale_flags()
+        self.settle()
+        if not self.idle():
+            return SPEAKING_POLL_SECONDS
+        return self.quiet_remaining()
+
+    def silence_due(self) -> bool:
+        """Has the call been idle for the full allowance?
+
+        Settles first, and that ordering is the whole point. A call can fall
+        idle because a message said so, or just because the clock ran out on
+        the bot's speech — and only the first of those goes through settle()
+        on its own. Checking idle() without settling would measure the
+        allowance from before the bot started talking, so the nudge would land
+        the instant its audio ended and the caller would get no room to answer
+        at all.
+        """
+        self.settle()
+        return self.idle() and self.quiet_remaining() <= 0.0
+
     async def wait_for_agent_silence(self, cap: float) -> bool:
         """Block until the agent's current utterance finishes playing. False if
-        the event never came and we gave up at `cap` seconds."""
+        the event never came and we fell back to something else.
+
+        On a call with no speaker events, waiting out the full cap would put a
+        silent pause on the end of every goodbye. The estimate is a better
+        guess than the cap, so it wins when there are no events to trust.
+        """
+        if not self.saw_speaker_events:
+            remaining = self._speech_estimate_until - time.monotonic()
+            await asyncio.sleep(min(max(remaining, 0.0), cap))
+            return False
         try:
             await asyncio.wait_for(self._agent_stopped.wait(), timeout=cap)
             return True
@@ -213,6 +286,10 @@ def handle_info(session: Session, msg: dict) -> None:
 
     logger.info("speaker event: %s=%s call=%s", name, value, session.call_sid)
     if name == AGENT_SPEAKING:
+        # Twilio is reporting real playback, so stop guessing at it.
+        if not session.saw_speaker_events:
+            logger.info("speaker events are live; dropping the playback estimate")
+            session.saw_speaker_events = True
         session.set_agent_speaking(speaking)
     else:
         session.set_caller_speaking(speaking)
@@ -223,7 +300,7 @@ def handle_info(session: Session, msg: dict) -> None:
 
 async def say(ws: WebSocket, session: Session, text: str) -> None:
     """Speak a fixed line and record it in the transcript."""
-    session.speech_sent()
+    session.speech_sent(text)
     await ws.send_json({"type": "text", "token": text, "last": True})
     session.history.append({"role": "assistant", "content": text})
 
@@ -258,9 +335,14 @@ async def on_silence(ws: WebSocket, session: Session) -> str | None:
     socket; the caller owns that loop, so the caller owns the hangup.
     """
     if not session.nudged:
-        logger.info("silence nudge: call=%s", session.call_sid)
+        logger.info(
+            "silence nudge: call=%s after %.1fs idle",
+            session.call_sid,
+            settings.silence_prompt_seconds,
+        )
         await say(ws, session, STILL_THERE)
         session.nudged = True
+        session.nudges += 1
         return None
 
     logger.info("silence hangup: call=%s", session.call_sid)
@@ -275,7 +357,7 @@ async def run_turn(ws: WebSocket, session: Session, heard: str) -> None:
     pending = ""  # withhold a marker-length tail so it's never spoken
 
     async def send(token: str, last: bool) -> None:
-        session.speech_sent()
+        session.speech_sent(token)
         await ws.send_json({"type": "text", "token": token, "last": last})
 
     try:
@@ -348,9 +430,9 @@ async def handle_relay(ws: WebSocket) -> None:
 
             if receive not in done:
                 # Woke on the clock. While anyone is speaking that's just the
-                # watchdog tick; only an idle call has actually gone quiet, and
-                # a call already saying goodbye is past nudging.
-                if hangup is None and session.idle():
+                # watchdog tick; only a call idle for the full allowance has
+                # gone quiet, and one already saying goodbye is past nudging.
+                if hangup is None and session.silence_due():
                     reason = await on_silence(ws, session)
                     if reason:
                         hangup = asyncio.create_task(end_call(ws, session, reason))
@@ -372,6 +454,11 @@ async def handle_relay(ws: WebSocket) -> None:
                 session.call_sid = msg.get("callSid")
                 session.from_number = msg.get("customParameters", {}).get("from")
                 session.system = system_prompt(session.from_number)
+                # Twilio speaks the welcome greeting from the TwiML attribute,
+                # so its tokens never pass through here. Seed the fallback
+                # estimate with it by hand, or a call with no speaker events
+                # counts the greeting as the caller sitting silent.
+                session.speech_sent(GREETING)
                 logger.info(
                     "relay setup: call=%s from=%s",
                     session.call_sid,
@@ -398,6 +485,16 @@ async def handle_relay(ws: WebSocket) -> None:
     except WebSocketDisconnect:
         logger.info("relay disconnected: call=%s", session.call_sid)
     finally:
+        # One line per call saying which mechanism was actually driving the
+        # silence clock. If a mistimed "are you still there?" gets reported,
+        # this is what says whether the events were there to prevent it.
+        logger.info(
+            "call summary: call=%s speaker_events=%s nudges=%d turns=%d",
+            session.call_sid,
+            "live" if session.saw_speaker_events else "NONE (estimated playback)",
+            session.nudges,
+            sum(1 for m in session.history if m["role"] == "user"),
+        )
         if receive is not None:
             receive.cancel()
         if hangup is not None:

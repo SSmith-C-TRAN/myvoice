@@ -20,6 +20,11 @@ class Settings(BaseSettings):
 
     public_domain: str = "sparkal.ai"
 
+    # INFO gives you a line per turn plus a summary per call. DEBUG adds every
+    # unrecognized inbound WebSocket message, which is how you'd inspect a
+    # Twilio event this code doesn't handle yet.
+    log_level: str = "INFO"
+
     tts_provider: str = "Google"
     tts_voice: str = "en-US-Journey-F"
 
@@ -34,16 +39,21 @@ class Settings(BaseSettings):
     # playing, no caller talking, no reply being generated — measured from
     # Twilio's speaker events, not estimated from text length. So these are
     # real seconds of dead air, and can be short.
-    silence_prompt_seconds: float = 10.0  # quiet before "Are you still there?"
-    silence_hangup_seconds: float = 10.0  # more quiet after that, then goodbye
+    # The first one is thinking time: it starts when the bot stops talking, so
+    # it's how long a caller gets to answer a question before being prodded.
+    # People pause to check a number or gather a thought, so it's the more
+    # patient of the two. The second runs after the nudge, when the likeliest
+    # explanation is that nobody's there.
+    silence_prompt_seconds: float = 15.0  # quiet before "Are you still there?"
+    silence_hangup_seconds: float = 12.0  # more quiet after that, then goodbye
     # Fallback bound only. Normally the goodbye's agentSpeaking=off event tells
     # us playback finished and we hang up right then; this caps the wait in
     # case that event never arrives. Not a delay we expect callers to hear.
     end_grace_seconds: float = 10.0
 
     anthropic_api_key: str = ""
-    llm_primary: str = "claude-haiku-4-5"
-    llm_max_tokens: int = 1000  # replies are spoken, so keep them short
+    llm_primary: str = "claude-haiku-4-5-20251001"
+    llm_max_tokens: int = 500  # replies are spoken, so keep them short
 
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""

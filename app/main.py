@@ -1,16 +1,26 @@
+import logging
+import sys
+
 from fastapi import FastAPI, Form, WebSocket
 from fastapi.responses import PlainTextResponse, Response
 
 from app.config import settings
+from app.prompts import GREETING
 from app.relay import handle_relay
 from app.twiml import connect_relay, dial_then_bot, hangup
 
-app = FastAPI(title="firstsignal-voice")
-
-GREETING = (
-    "Hi, this is Jace, Steve's assistant. He's not available right now, "
-    "but I'd be glad to take a message. Who's this?"
+# Uvicorn configures its own loggers and leaves the root logger alone, so
+# without this every logger.info() in the app goes nowhere — including the
+# per-call summary that says whether Twilio's speaker events arrived. Silent
+# by default is the wrong default for something you can only debug from the
+# outside, one phone call at a time.
+logging.basicConfig(
+    level=getattr(logging, settings.log_level.upper(), logging.INFO),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    stream=sys.stdout,
 )
+
+app = FastAPI(title="firstsignal-voice")
 
 
 def twiml(body: str) -> Response:

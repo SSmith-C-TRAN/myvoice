@@ -54,11 +54,23 @@ bot's own answer. The hangup keys off the same events, which is why it lands
 right as the goodbye ends instead of after a fixed pause.
 
 Any caller speech resets the clock and re-arms the nudge. Tune with
-`SILENCE_PROMPT_SECONDS` / `SILENCE_HANGUP_SECONDS` — these are now real
-seconds of dead air, so they can be short. Twilio doesn't publish the JSON
-shape of the speaker events; see [docs/conversationrelay-events.md](docs/conversationrelay-events.md)
-for what they look like, how confident we are, and what happens if they stop
-arriving.
+`SILENCE_PROMPT_SECONDS` / `SILENCE_HANGUP_SECONDS`. The first is thinking
+time — how long a caller gets to answer a question — so it's the more patient
+of the two.
+
+If the speaker events don't arrive, the relay falls back to estimating
+playback from the length of what it sent, which is a guess but a much better
+one than assuming silence. The first real event switches the guess off for
+good. Every call logs which mode it ran in:
+
+```
+call summary: call=CAxxx speaker_events=live nudges=0 turns=4
+```
+
+`speaker_events=NONE` there means the subscription isn't reaching us — check
+the `events` attribute in the TwiML. Twilio doesn't publish the JSON shape of
+these messages; see [docs/conversationrelay-events.md](docs/conversationrelay-events.md)
+for what they look like and how confident we are.
 
 At call end (the bot wraps up and ends the call, or the caller hangs up), the
 transcript is distilled into a structured message — name, callback number,
@@ -116,6 +128,7 @@ Copy `.env.example` to `.env`. Steps 1–2 only need:
 | `FORWARD_TO_NUMBER`| `+18084649192` | Your cell, E.164. `dial-first` only.   |
 | `DIAL_TIMEOUT`     | `15`           | Seconds before falling through to bot. `dial-first` only. |
 | `PUBLIC_DOMAIN`    | `sparkal.ai`   | Public host; baked into the `wss://` relay URL. Restart on change. |
+| `LOG_LEVEL`        | `INFO`         | `INFO` logs a line per turn and a summary per call; `DEBUG` adds unrecognized WebSocket messages. |
 | `TTS_PROVIDER`     | `Google`       | Twilio TTS provider: `Google`, `Amazon`, or `ElevenLabs` (key required in Console). |
 | `TTS_VOICE`        | `en-US-Journey-F` | Voice ID for the provider. Baked into TwiML — restart on change. |
 | `RELAY_EVENTS`     | `speaker-events` | Twilio event subscriptions, space-separated. `speaker-events` is load-bearing — see Ending the call. Add `tokens-played` to debug playback. |

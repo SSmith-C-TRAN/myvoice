@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
 
-from app import llm, messages, notify, relay
+from app import llm, main, messages, notify, relay
 from app.config import settings
 from app.main import app
 from app.messages import Extracted, Message
@@ -182,6 +182,10 @@ def _fast_silence(monkeypatch):
     monkeypatch.setattr(settings, "silence_hangup_seconds", 0.05)
     monkeypatch.setattr(settings, "end_grace_seconds", 0.0)
     monkeypatch.setattr(relay, "SPEAKING_POLL_SECONDS", 0.02)
+    # These tests mostly send no speaker events, which would leave the fallback
+    # estimate holding the call non-idle for the real length of every line.
+    # Tests that want the estimate set the rate back themselves.
+    monkeypatch.setattr(relay, "SPEECH_CHARS_PER_SEC", 10_000.0)
 
 
 def test_silence_nudges_then_says_goodbye_and_ends(monkeypatch):
@@ -320,6 +324,71 @@ def test_stale_agent_speaking_flag_expires(monkeypatch):
         ws.send_json(_speaking(relay.AGENT_SPEAKING, True))  # no matching "off"
 
         assert ws.receive_json()["token"] == relay.STILL_THERE
+
+
+def test_playback_is_estimated_when_no_speaker_events_arrive(monkeypatch):
+    """If Twilio never reports playback we fall back to estimating it, so the
+    nudge still can't land on top of the bot's own question."""
+    _stub_capture_and_notify(monkeypatch)
+    _fast_silence(monkeypatch)
+    # 50 chars/sec: the ~20-char nudge is ~0.4s of "audio", against a 0.05s
+    # allowance. Without the estimate the goodbye would follow near-instantly.
+    monkeypatch.setattr(relay, "SPEECH_CHARS_PER_SEC", 50.0)
+
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"type": "setup", "callSid": "CA123", "customParameters": {}})
+        assert ws.receive_json()["token"] == relay.STILL_THERE
+        after_nudge = time.monotonic()
+        assert "Goodbye" in ws.receive_json()["token"]
+
+    spoken = relay.speech_seconds(relay.STILL_THERE)
+    assert time.monotonic() - after_nudge >= spoken * 0.8
+
+
+def test_caller_gets_full_thinking_time_after_the_bot_stops(monkeypatch):
+    """The allowance is measured from when the bot stops talking, not from
+    before it started.
+
+    A call can fall idle because a message said so, or because the clock ran
+    out on estimated playback. Only the first settles on its own, so the second
+    used to fire the nudge the instant the audio ended — the caller got no room
+    to answer at all. Both paths owe the same pause.
+    """
+    _stub_capture_and_notify(monkeypatch)
+    _fast_silence(monkeypatch)
+    monkeypatch.setattr(settings, "silence_prompt_seconds", 0.5)
+    monkeypatch.setattr(relay, "SPEECH_CHARS_PER_SEC", 200.0)
+    monkeypatch.setattr(relay, "SPEAKING_POLL_SECONDS", 0.05)
+
+    with client.websocket_connect("/ws") as ws:
+        started = time.monotonic()
+        ws.send_json({"type": "setup", "callSid": "CA123", "customParameters": {}})
+        assert ws.receive_json()["token"] == relay.STILL_THERE
+        waited = time.monotonic() - started
+
+    playback = relay.speech_seconds(main.GREETING)
+    thinking = waited - playback
+    assert thinking >= 0.45, f"only {thinking:.2f}s to answer, expected ~0.5s"
+
+
+def test_speaker_events_switch_the_estimate_off(monkeypatch):
+    """A real agent event means Twilio is reporting playback, so the guess is
+    dropped — otherwise a slow estimate would hold the call past the truth."""
+    _stub_capture_and_notify(monkeypatch)
+    _fast_silence(monkeypatch)
+    # Slow enough that, if the estimate were still consulted, the nudge would
+    # be held back for many seconds after the agent-stop event says otherwise.
+    monkeypatch.setattr(relay, "SPEECH_CHARS_PER_SEC", 2.0)
+
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"type": "setup", "callSid": "CA123", "customParameters": {}})
+        ws.send_json(_speaking(relay.AGENT_SPEAKING, True))
+        ws.send_json(_speaking(relay.AGENT_SPEAKING, False))
+        started = time.monotonic()
+
+        assert ws.receive_json()["token"] == relay.STILL_THERE
+
+    assert time.monotonic() - started < 3.0  # the events won, not the estimate
 
 
 def test_barge_in_cancels_the_reply_and_the_call_continues(monkeypatch):

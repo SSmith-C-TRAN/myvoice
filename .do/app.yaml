@@ -25,7 +25,7 @@ services:
       - key: TTS_VOICE
         value: "en-US-Journey-F"
       - key: NOTIFY_SMS_TO
-        value: "+18084649192"
+        value: ""
       - key: ANTHROPIC_API_KEY
         scope: RUN_TIME
         type: SECRET
