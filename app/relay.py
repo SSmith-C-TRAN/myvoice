@@ -26,6 +26,9 @@ from app.prompts import system_prompt
 logger = logging.getLogger("relay")
 
 END_MARKER = "[[END]]"
+# Withhold a little more than the marker itself, so a marker followed by a
+# stray newline or space is still caught whole instead of half-spoken.
+TAIL = len(END_MARKER) + 4
 
 
 class Session:
@@ -52,14 +55,14 @@ async def run_turn(ws: WebSocket, session: Session, heard: str) -> None:
     try:
         async for token in llm.stream_reply(session.system, session.history):
             pending += token
-            if len(pending) > len(END_MARKER):
-                flush, pending = pending[: -len(END_MARKER)], pending[-len(END_MARKER) :]
+            if len(pending) > TAIL:
+                flush, pending = pending[:-TAIL], pending[-TAIL:]
                 spoken.append(flush)
                 await ws.send_json({"type": "text", "token": flush, "last": False})
 
-        ending = pending.endswith(END_MARKER)
+        ending = pending.rstrip().endswith(END_MARKER)
         if ending:
-            pending = pending[: -len(END_MARKER)]
+            pending = pending.rstrip()[: -len(END_MARKER)]
         if pending:
             spoken.append(pending)
             await ws.send_json({"type": "text", "token": pending, "last": False})

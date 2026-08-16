@@ -120,6 +120,35 @@ def test_ws_bot_ends_call(monkeypatch):
     assert end["type"] == "end-session"
 
 
+def test_ws_strips_marker_with_trailing_whitespace(monkeypatch):
+    """A newline after the marker must not leak marker text into TTS."""
+    _stub_capture_and_notify(monkeypatch)
+
+    async def fake_stream(system, messages_):
+        for token in ["Take care!", "[[END]]", "\n"]:
+            yield token
+
+    monkeypatch.setattr(llm, "stream_reply", fake_stream)
+
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"type": "setup", "callSid": "CA123", "customParameters": {}})
+        ws.send_json({"type": "prompt", "voicePrompt": "bye"})
+
+        spoken = []
+        while True:
+            msg = ws.receive_json()
+            if msg["type"] == "text":
+                spoken.append(msg["token"])
+                if msg["last"]:
+                    break
+
+        end = ws.receive_json()
+
+    assert "".join(spoken) == "Take care!"
+    assert "END" not in "".join(spoken)
+    assert end["type"] == "end-session"
+
+
 def test_capture_assembles_message(monkeypatch):
     async def fake_extract(system, user, schema):
         assert "Caller:" in user  # transcript was rendered
