@@ -1,4 +1,5 @@
 import asyncio
+import json
 from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
@@ -17,7 +18,16 @@ def test_healthz():
     assert r.text == "ok"
 
 
-def test_voice_dials_cell_first():
+def test_voice_bot_answers_immediately():
+    """Default mode: the carrier already rang the cell, so pick up now."""
+    r = client.post("/voice")
+    assert r.status_code == 200
+    assert "<ConversationRelay" in r.text
+    assert "<Dial" not in r.text
+
+
+def test_voice_dial_first_mode_dials_cell(monkeypatch):
+    monkeypatch.setattr(settings, "answer_mode", "dial-first")
     r = client.post("/voice")
     assert r.status_code == 200
     body = r.text
@@ -116,8 +126,10 @@ def test_ws_bot_ends_call(monkeypatch):
     # The marker is stripped — never spoken to the caller.
     assert "".join(spoken) == "Thanks! Goodbye."
     assert "[[END]]" not in "".join(spoken)
-    # And the bot signals Twilio to end the call.
-    assert end["type"] == "end-session"
+    # And the bot signals Twilio to end the call. The type must be exactly
+    # "end" — Twilio drops unknown types silently and the call would hang.
+    assert end["type"] == "end"
+    assert json.loads(end["handoffData"])["reasonCode"] == "message-captured"
 
 
 def test_ws_strips_marker_with_trailing_whitespace(monkeypatch):
@@ -146,7 +158,7 @@ def test_ws_strips_marker_with_trailing_whitespace(monkeypatch):
 
     assert "".join(spoken) == "Take care!"
     assert "END" not in "".join(spoken)
-    assert end["type"] == "end-session"
+    assert end["type"] == "end"
 
 
 def test_capture_assembles_message(monkeypatch):

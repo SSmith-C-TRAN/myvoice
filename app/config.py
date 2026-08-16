@@ -1,10 +1,20 @@
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    # Call routing
+    # Call routing.
+    # "bot"        — the assistant answers immediately. Use this when your
+    #                carrier forwards to the Twilio number only after you
+    #                don't pick up, so the ringing already happened.
+    # "dial-first" — Twilio is the number people dial; ring forward_to_number
+    #                first and fall back to the bot on no-answer.
+    answer_mode: Literal["bot", "dial-first"] = "bot"
+
+    # Only used in "dial-first" mode.
     forward_to_number: str = "+18084649192"  # your cell, E.164
     dial_timeout: int = 15  # seconds — must beat carrier voicemail
 

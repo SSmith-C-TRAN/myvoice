@@ -6,16 +6,19 @@ full answer is ready. A barge-in (`interrupt`) cancels the in-flight generation.
 
 Ending a call (step 5): the bot appends a silent `[[END]]` marker to its final
 goodbye when it has what it needs. We strip the marker (never speak it), send
-`end-session`, and Twilio closes the socket. Whether the bot ends the call or
-the caller simply hangs up, both paths land in the disconnect handler, where
+`end`, and Twilio closes the socket. Whether the bot ends the call or the
+caller simply hangs up, both paths land in the disconnect handler, where
 `finalize` turns the transcript into a message and texts it to you.
 
 Protocol reference:
   Twilio -> us:  setup | prompt | interrupt | dtmf | error
-  us -> Twilio:  {"type":"text","token":...,"last":bool} | {"type":"end-session",...}
+  us -> Twilio:  text | play | sendDigits | language | end
+Twilio ignores message types it doesn't recognize, so a typo here reads as
+"the bot never hangs up" rather than as an error.
 """
 
 import asyncio
+import json
 import logging
 
 from fastapi import WebSocket, WebSocketDisconnect
@@ -71,7 +74,13 @@ async def run_turn(ws: WebSocket, session: Session, heard: str) -> None:
 
         if ending:
             logger.info("bot ending call: %s", session.call_sid)
-            await ws.send_json({"type": "end-session", "handoffData": "captured"})
+            # handoffData must be a JSON-encoded *string*, not an object.
+            await ws.send_json(
+                {
+                    "type": "end",
+                    "handoffData": json.dumps({"reasonCode": "message-captured"}),
+                }
+            )
     except asyncio.CancelledError:
         # Caller barged in — drop the rest of this reply.
         logger.info("turn cancelled mid-reply")
