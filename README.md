@@ -1,0 +1,73 @@
+# firstsignal-voice
+
+A personal phone line that rings your cell first and, when you miss the call,
+hands the caller to an AI receptionist that takes a message and texts you a
+summary.
+
+Built on Twilio ConversationRelay + FastAPI. See the full plan for the roadmap.
+
+## Status
+
+- [x] **Step 1 — Scaffold + deploy.** FastAPI app, `/healthz`, Dockerfile, App Platform config.
+- [x] **Step 2 — Dial-through.** `/voice` rings the cell; `/voice/after-dial` falls through when unanswered.
+- [x] **Step 3 — Relay echo bot.** Missed calls hand off to `/ws`, which echoes what the caller says.
+- [x] **Step 4 — LLM turn loop.** `/ws` streams Claude Haiku 4.5 replies token by token; barge-in cancels the in-flight turn.
+- [ ] Step 5 — Capture + notify
+- [ ] Step 6 — Harden
+- [ ] Step 7 — Call log (optional)
+
+## Endpoints
+
+| Method | Path                | Purpose                                                   |
+|--------|---------------------|-----------------------------------------------------------|
+| GET    | `/healthz`          | Health check for App Platform.                            |
+| POST   | `/voice`            | Number's voice webhook. Dials your cell (15s timeout).    |
+| POST   | `/voice/after-dial` | Dial callback. `completed` → hang up; else → connect bot. |
+| WS     | `/ws`               | ConversationRelay turn loop. Streams Claude's replies.    |
+| POST   | `/voice/handoff`    | Relay session ended. Hangs up.                            |
+
+The **carrier voicemail race**: keep `DIAL_TIMEOUT` at 15s and disable/delay
+carrier voicemail on the cell so Twilio's no-answer fallback wins.
+
+## Local development
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+uvicorn app.main:app --reload --port 8080
+```
+
+Or with Docker:
+
+```bash
+docker compose up --build
+```
+
+Run tests:
+
+```bash
+pip install pytest httpx
+pytest
+```
+
+## Configuration
+
+Copy `.env.example` to `.env`. Steps 1–2 only need:
+
+| Var                | Default        | Meaning                                |
+|--------------------|----------------|----------------------------------------|
+| `FORWARD_TO_NUMBER`| `+18084649192` | Your cell, E.164. Rings first.         |
+| `DIAL_TIMEOUT`     | `15`           | Seconds before falling through to bot. |
+| `PUBLIC_DOMAIN`    | `sparkal.ai`   | Public host; baked into the `wss://` relay URL. Restart on change. |
+| `ANTHROPIC_API_KEY`| —              | Required from step 4 on for the bot to talk.          |
+| `LLM_PRIMARY`      | `claude-haiku-4-5` | Voice model. Reasoning stays off for low latency. |
+| `LLM_MAX_TOKENS`   | `200`          | Cap per reply — replies are spoken, so keep them short. |
+
+## Deploy — DigitalOcean App Platform
+
+1. Push to GitHub and point an App Platform app at the repo (or use `.do/app.yaml`).
+2. It builds from the `Dockerfile` and serves on port 8080.
+3. Set env vars; health check is `GET /healthz`.
+4. Grab the public domain and set the number's Voice webhook to
+   `https://<domain>/voice` (HTTP POST) in the Twilio console.

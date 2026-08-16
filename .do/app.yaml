@@ -1,0 +1,26 @@
+name: firstsignal-voice
+services:
+  - name: web
+    github:
+      repo: <your-gh-user>/firstsignal-voice
+      branch: main
+      deploy_on_push: true
+    dockerfile_path: Dockerfile
+    http_port: 8080
+    instance_size_slug: basic-xxs
+    instance_count: 1
+    health_check:
+      http_path: /healthz
+    envs:
+      - key: FORWARD_TO_NUMBER
+        value: "+18084649192"
+      - key: DIAL_TIMEOUT
+        value: "15"
+      - key: PUBLIC_DOMAIN
+        value: "sparkal.ai"
+      - key: LLM_PRIMARY
+        value: "claude-haiku-4-5"
+      - key: ANTHROPIC_API_KEY
+        scope: RUN_TIME
+        type: SECRET
+        value: "" # set in the App Platform dashboard, not committed
