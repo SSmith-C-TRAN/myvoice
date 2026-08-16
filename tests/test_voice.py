@@ -1,10 +1,11 @@
 import asyncio
 import json
+import time
 from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
 
-from app import llm, messages, notify
+from app import llm, main, messages, notify, relay
 from app.config import settings
 from app.main import app
 from app.messages import Extracted, Message
@@ -102,6 +103,7 @@ def test_ws_streams_llm_reply(monkeypatch):
 
 def test_ws_bot_ends_call(monkeypatch):
     _stub_capture_and_notify(monkeypatch)
+    monkeypatch.setattr(settings, "end_grace_seconds", 0.0)
 
     async def fake_stream(system, messages_):
         for token in ["Thanks! ", "Goodbye.", "[[END]]"]:
@@ -135,6 +137,7 @@ def test_ws_bot_ends_call(monkeypatch):
 def test_ws_strips_marker_with_trailing_whitespace(monkeypatch):
     """A newline after the marker must not leak marker text into TTS."""
     _stub_capture_and_notify(monkeypatch)
+    monkeypatch.setattr(settings, "end_grace_seconds", 0.0)
 
     async def fake_stream(system, messages_):
         for token in ["Take care!", "[[END]]", "\n"]:
@@ -159,6 +162,79 @@ def test_ws_strips_marker_with_trailing_whitespace(monkeypatch):
     assert "".join(spoken) == "Take care!"
     assert "END" not in "".join(spoken)
     assert end["type"] == "end"
+
+
+def _fast_silence(monkeypatch):
+    """Shrink the silence timers so tests don't sit through real seconds.
+
+    The speaking rate goes too: otherwise every test waits out the greeting's
+    real ~7s of estimated audio before the first nudge is due.
+    """
+    monkeypatch.setattr(settings, "silence_prompt_seconds", 0.05)
+    monkeypatch.setattr(settings, "silence_hangup_seconds", 0.05)
+    monkeypatch.setattr(settings, "end_grace_seconds", 0.0)
+    monkeypatch.setattr(relay, "SPEECH_CHARS_PER_SEC", 10_000.0)
+
+
+def test_silence_nudges_then_says_goodbye_and_ends(monkeypatch):
+    """A caller who never speaks gets one nudge, then a spoken goodbye."""
+    _stub_capture_and_notify(monkeypatch)
+    _fast_silence(monkeypatch)
+
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"type": "setup", "callSid": "CA123", "customParameters": {}})
+
+        nudge = ws.receive_json()
+        assert nudge["type"] == "text"
+        assert nudge["token"] == relay.STILL_THERE
+
+        goodbye = ws.receive_json()
+        assert goodbye["type"] == "text"
+        assert "Goodbye" in goodbye["token"]
+        assert goodbye["last"] is True
+
+        end = ws.receive_json()
+        assert end["type"] == "end"
+        assert json.loads(end["handoffData"])["reasonCode"] == "caller-silent"
+
+
+def test_speaking_resets_the_silence_clock(monkeypatch):
+    """Talking after the nudge earns a fresh nudge, not an immediate hangup."""
+    _stub_capture_and_notify(monkeypatch)
+    _fast_silence(monkeypatch)
+
+    async def fake_stream(system, messages_):
+        yield "Sure thing."
+
+    monkeypatch.setattr(llm, "stream_reply", fake_stream)
+
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"type": "setup", "callSid": "CA123", "customParameters": {}})
+        assert ws.receive_json()["token"] == relay.STILL_THERE
+
+        ws.send_json({"type": "prompt", "voicePrompt": "still here"})
+        while not ws.receive_json()["last"]:  # drain the reply
+            pass
+
+        # nudged was cleared, so the next quiet stretch nudges again.
+        assert ws.receive_json()["token"] == relay.STILL_THERE
+
+
+def test_greeting_delays_the_first_nudge(monkeypatch):
+    """The welcome greeting is Twilio talking, not the caller being quiet."""
+    _stub_capture_and_notify(monkeypatch)
+    _fast_silence(monkeypatch)
+    # Slow the rate back down so the greeting is long enough to hold the nudge.
+    monkeypatch.setattr(relay, "SPEECH_CHARS_PER_SEC", 200.0)
+
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"type": "setup", "callSid": "CA123", "customParameters": {}})
+        started = time.monotonic()
+        assert ws.receive_json()["token"] == relay.STILL_THERE
+        waited = time.monotonic() - started
+
+    expected = relay.speech_seconds(main.GREETING)
+    assert waited >= expected * 0.5  # the greeting held the clock back
 
 
 def test_capture_assembles_message(monkeypatch):

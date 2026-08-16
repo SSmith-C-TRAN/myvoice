@@ -26,6 +26,26 @@ Built on Twilio ConversationRelay + FastAPI. See the full plan for the roadmap.
 | WS     | `/ws`               | ConversationRelay turn loop. Streams Claude's replies, then captures the message and texts it to you. |
 | POST   | `/voice/handoff`    | Relay session ended. Hangs up.                            |
 
+## Ending the call
+
+Three ways a call ends. The bot decides it's done and appends a silent
+`[[END]]` marker to its goodbye; the caller hangs up; or the caller goes quiet.
+
+Silence needs its own handling because a caller who says nothing sends no
+WebSocket messages at all — with no message there's no turn, and the LLM never
+gets a chance to hang up. The relay loop therefore waits on the clock as well
+as the socket. For a caller who never speaks, the timeline runs:
+
+| At    | What happens                                          |
+|-------|-------------------------------------------------------|
+| 0s    | Greeting starts playing (~7s, estimated from its length; not counted as silence) |
+| ~15s  | "Are you still there?"                                 |
+| ~23s  | "Alright, I'll let you go. Thanks for calling. Goodbye!" |
+| ~26s  | Hangup, after `END_GRACE_SECONDS`                       |
+
+Any caller speech resets the clock and re-arms the nudge. Tune with
+`SILENCE_PROMPT_SECONDS` / `SILENCE_HANGUP_SECONDS`.
+
 At call end (the bot wraps up and ends the call, or the caller hangs up), the
 transcript is distilled into a structured message — name, callback number,
 reason, urgency — and texted to `NOTIFY_SMS_TO`. Requires a **SMS-capable**
@@ -84,6 +104,9 @@ Copy `.env.example` to `.env`. Steps 1–2 only need:
 | `PUBLIC_DOMAIN`    | `sparkal.ai`   | Public host; baked into the `wss://` relay URL. Restart on change. |
 | `TTS_PROVIDER`     | `Google`       | Twilio TTS provider: `Google`, `Amazon`, or `ElevenLabs` (key required in Console). |
 | `TTS_VOICE`        | `en-US-Journey-F` | Voice ID for the provider. Baked into TwiML — restart on change. |
+| `SILENCE_PROMPT_SECONDS` | `8`      | Quiet before the bot asks "Are you still there?"  |
+| `SILENCE_HANGUP_SECONDS` | `8`      | More quiet after that, then goodbye and hang up.  |
+| `END_GRACE_SECONDS`| `3`            | Pause after the goodbye so it isn't clipped.          |
 | `ANTHROPIC_API_KEY`| —              | Required from step 4 on for the bot to talk.          |
 | `LLM_PRIMARY`      | `claude-haiku-4-5` | Voice model. Reasoning stays off for low latency. |
 | `LLM_MAX_TOKENS`   | `200`          | Cap per reply — replies are spoken, so keep them short. |

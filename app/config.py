@@ -23,6 +23,15 @@ class Settings(BaseSettings):
     tts_provider: str = "Google"
     tts_voice: str = "en-US-Journey-F"
 
+    # Silence handling. A caller who says nothing sends no messages at all, so
+    # the bot has to notice the quiet itself or the line stays open.
+    silence_prompt_seconds: float = 4.0  # quiet before "Are you still there?"
+    silence_hangup_seconds: float = 4.0  # more quiet after that, then goodbye
+    # Twilio doesn't tell us when TTS finishes, and it's undocumented whether
+    # `end` cuts off audio still playing — so hold the socket open this long
+    # after the goodbye. Raise it if callers hear the goodbye clipped.
+    end_grace_seconds: float = 3.0
+
     anthropic_api_key: str = ""
     llm_primary: str = "claude-haiku-4-5"
     llm_max_tokens: int = 200  # replies are spoken, so keep them short
