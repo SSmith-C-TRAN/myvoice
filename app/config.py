@@ -23,11 +23,22 @@ class Settings(BaseSettings):
     tts_provider: str = "Google"
     tts_voice: str = "en-US-Journey-F"
 
-    silence_prompt_seconds: float = 8.0  # quiet before "Are you still there?"
-    silence_hangup_seconds: float = 8.0  # more quiet after that, then goodbye
-    # Twilio doesn't tell us when TTS finishes, and it's undocumented whether
-    # `end` cuts off audio still playing — so hold the socket open this long
-    # after the goodbye. Raise it if callers hear the goodbye clipped.
+    # Space-separated <ConversationRelay events="..."> subscription.
+    # "speaker-events" is load-bearing: it's how we learn when TTS and the
+    # caller actually start and stop, which is what the silence clock and the
+    # hangup both key off. Add "tokens-played" to see per-chunk playback
+    # confirmations — noisy, useful only for debugging.
+    relay_events: str = "speaker-events"
+
+    # Idle time before the bot speaks up. "Idle" now means what it says: no TTS
+    # playing, no caller talking, no reply being generated — measured from
+    # Twilio's speaker events, not estimated from text length. So these are
+    # real seconds of dead air, and can be short.
+    silence_prompt_seconds: float = 10.0  # quiet before "Are you still there?"
+    silence_hangup_seconds: float = 10.0  # more quiet after that, then goodbye
+    # Fallback bound only. Normally the goodbye's agentSpeaking=off event tells
+    # us playback finished and we hang up right then; this caps the wait in
+    # case that event never arrives. Not a delay we expect callers to hear.
     end_grace_seconds: float = 8.0
 
     anthropic_api_key: str = ""

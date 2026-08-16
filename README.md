@@ -38,13 +38,27 @@ as the socket. For a caller who never speaks, the timeline runs:
 
 | At    | What happens                                          |
 |-------|-------------------------------------------------------|
-| 0s    | Greeting starts playing (~7s, estimated from its length; not counted as silence) |
-| ~15s  | "Are you still there?"                                 |
-| ~23s  | "Alright, I'll let you go. Thanks for calling. Goodbye!" |
-| ~26s  | Hangup, after `END_GRACE_SECONDS`                       |
+| 0s    | Greeting plays. The clock is stopped while it does     |
+| +10s  | "Are you still there?" — 10s after the greeting *finishes* |
+| +10s  | "Alright, I'll let you go. Thanks for calling. Goodbye!" |
+| —     | Hangup, the moment the goodbye finishes playing         |
+
+The clock only runs when the call is genuinely idle: no TTS playing, no caller
+talking, no reply being generated. That's not estimated from how long the text
+is — Twilio reports when the agent and the caller each start and stop, and the
+relay subscribes to those events with `events="speaker-events"` on the
+`<ConversationRelay>` element. It matters because generating a 200-token reply
+takes about 2 seconds while *speaking* it takes up to 40, so a clock started
+when generation ended would fire "Are you still there?" over the tail of the
+bot's own answer. The hangup keys off the same events, which is why it lands
+right as the goodbye ends instead of after a fixed pause.
 
 Any caller speech resets the clock and re-arms the nudge. Tune with
-`SILENCE_PROMPT_SECONDS` / `SILENCE_HANGUP_SECONDS`.
+`SILENCE_PROMPT_SECONDS` / `SILENCE_HANGUP_SECONDS` — these are now real
+seconds of dead air, so they can be short. Twilio doesn't publish the JSON
+shape of the speaker events; see [docs/conversationrelay-events.md](docs/conversationrelay-events.md)
+for what they look like, how confident we are, and what happens if they stop
+arriving.
 
 At call end (the bot wraps up and ends the call, or the caller hangs up), the
 transcript is distilled into a structured message — name, callback number,
@@ -104,9 +118,10 @@ Copy `.env.example` to `.env`. Steps 1–2 only need:
 | `PUBLIC_DOMAIN`    | `sparkal.ai`   | Public host; baked into the `wss://` relay URL. Restart on change. |
 | `TTS_PROVIDER`     | `Google`       | Twilio TTS provider: `Google`, `Amazon`, or `ElevenLabs` (key required in Console). |
 | `TTS_VOICE`        | `en-US-Journey-F` | Voice ID for the provider. Baked into TwiML — restart on change. |
-| `SILENCE_PROMPT_SECONDS` | `8`      | Quiet before the bot asks "Are you still there?"  |
-| `SILENCE_HANGUP_SECONDS` | `8`      | More quiet after that, then goodbye and hang up.  |
-| `END_GRACE_SECONDS`| `3`            | Pause after the goodbye so it isn't clipped.          |
+| `RELAY_EVENTS`     | `speaker-events` | Twilio event subscriptions, space-separated. `speaker-events` is load-bearing — see Ending the call. Add `tokens-played` to debug playback. |
+| `SILENCE_PROMPT_SECONDS` | `10`     | Real seconds of dead air before "Are you still there?" |
+| `SILENCE_HANGUP_SECONDS` | `10`     | More dead air after that, then goodbye and hang up. |
+| `END_GRACE_SECONDS`| `8`            | Fallback only: longest we'll wait for the goodbye's stop event before hanging up regardless. Not a pause callers normally hear. |
 | `ANTHROPIC_API_KEY`| —              | Required from step 4 on for the bot to talk.          |
 | `LLM_PRIMARY`      | `claude-haiku-4-5` | Voice model. Reasoning stays off for low latency. |
 | `LLM_MAX_TOKENS`   | `200`          | Cap per reply — replies are spoken, so keep them short. |

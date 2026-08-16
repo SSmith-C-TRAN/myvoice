@@ -18,7 +18,11 @@ def hangup() -> str:
 
 
 def connect_relay(
-    public_domain: str, greeting: str, tts_provider: str, tts_voice: str
+    public_domain: str,
+    greeting: str,
+    tts_provider: str,
+    tts_voice: str,
+    events: str = "speaker-events",
 ) -> str:
     """Hand the caller to the ConversationRelay bot over a WebSocket.
 
@@ -26,6 +30,11 @@ def connect_relay(
     passed through as a <Parameter>, arriving in the setup message's
     customParameters. `tts_provider`/`tts_voice` pick the spoken voice —
     ElevenLabs additionally needs an API key configured in the Twilio Console.
+
+    `events` is a space-separated subscription list. "speaker-events" is what
+    makes Twilio tell us when the agent and the caller start and stop speaking
+    — without it we'd be back to guessing when TTS finishes from the length of
+    the text. See docs/conversationrelay-events.md.
     """
     return (
         '<?xml version="1.0" encoding="UTF-8"?>'
@@ -33,7 +42,8 @@ def connect_relay(
         '<Connect action="/voice/handoff">'
         f'<ConversationRelay url="wss://{public_domain}/ws" '
         f'welcomeGreeting="{greeting}" '
-        f'ttsProvider="{tts_provider}" voice="{tts_voice}">'
+        f'ttsProvider="{tts_provider}" voice="{tts_voice}" '
+        f'events="{events}">'
         '<Parameter name="from" value="{{From}}"/>'
         "</ConversationRelay>"
         "</Connect>"

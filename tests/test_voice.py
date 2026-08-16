@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
 
-from app import llm, main, messages, notify, relay
+from app import llm, messages, notify, relay
 from app.config import settings
 from app.main import app
 from app.messages import Extracted, Message
@@ -53,6 +53,9 @@ def test_after_dial_no_answer_connects_relay():
     assert 'action="/voice/handoff"' in r.text
     assert f'ttsProvider="{settings.tts_provider}"' in r.text
     assert f'voice="{settings.tts_voice}"' in r.text
+    # Load-bearing: without the subscription Twilio never sends the speaker
+    # events, and the silence clock is back to guessing.
+    assert 'events="speaker-events"' in r.text
 
 
 def test_handoff_hangs_up():
@@ -164,16 +167,21 @@ def test_ws_strips_marker_with_trailing_whitespace(monkeypatch):
     assert end["type"] == "end"
 
 
+def _speaking(name, on):
+    """A Twilio speaker event. See docs/conversationrelay-events.md."""
+    return {"type": "info", "name": name, "value": "on" if on else "off"}
+
+
 def _fast_silence(monkeypatch):
     """Shrink the silence timers so tests don't sit through real seconds.
 
-    The speaking rate goes too: otherwise every test waits out the greeting's
-    real ~7s of estimated audio before the first nudge is due.
+    The watchdog poll shrinks too, since it bounds how long after an
+    agentSpeaking=off the loop takes to notice the call went idle.
     """
     monkeypatch.setattr(settings, "silence_prompt_seconds", 0.05)
     monkeypatch.setattr(settings, "silence_hangup_seconds", 0.05)
     monkeypatch.setattr(settings, "end_grace_seconds", 0.0)
-    monkeypatch.setattr(relay, "SPEECH_CHARS_PER_SEC", 10_000.0)
+    monkeypatch.setattr(relay, "SPEAKING_POLL_SECONDS", 0.02)
 
 
 def test_silence_nudges_then_says_goodbye_and_ends(monkeypatch):
@@ -220,21 +228,152 @@ def test_speaking_resets_the_silence_clock(monkeypatch):
         assert ws.receive_json()["token"] == relay.STILL_THERE
 
 
-def test_greeting_delays_the_first_nudge(monkeypatch):
-    """The welcome greeting is Twilio talking, not the caller being quiet."""
+def test_agent_speech_holds_off_the_nudge(monkeypatch):
+    """The bug this all exists for: don't talk over the tail of our own reply.
+
+    Generating a reply takes ~2s; speaking it takes up to ~40s. Only the
+    agentSpeaking=off event marks the end, so the clock must not start until
+    it arrives — however long the audio runs.
+    """
     _stub_capture_and_notify(monkeypatch)
     _fast_silence(monkeypatch)
-    # Slow the rate back down so the greeting is long enough to hold the nudge.
-    monkeypatch.setattr(relay, "SPEECH_CHARS_PER_SEC", 200.0)
+    # A nudge is due 0.05s after idle, so 0.4s of "audio" is ~8 allowances.
+    playing = 0.4
 
     with client.websocket_connect("/ws") as ws:
         ws.send_json({"type": "setup", "callSid": "CA123", "customParameters": {}})
+        ws.send_json(_speaking(relay.AGENT_SPEAKING, True))
         started = time.monotonic()
-        assert ws.receive_json()["token"] == relay.STILL_THERE
-        waited = time.monotonic() - started
+        time.sleep(playing)
+        ws.send_json(_speaking(relay.AGENT_SPEAKING, False))
 
-    expected = relay.speech_seconds(main.GREETING)
-    assert waited >= expected * 0.5  # the greeting held the clock back
+        assert ws.receive_json()["token"] == relay.STILL_THERE
+        assert time.monotonic() - started >= playing
+
+
+def test_caller_speech_holds_off_the_nudge(monkeypatch):
+    """A slow talker is not a silent one. clientSpeaking suppresses the timer
+    even though no finalized prompt has arrived yet."""
+    _stub_capture_and_notify(monkeypatch)
+    _fast_silence(monkeypatch)
+    talking = 0.4
+
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"type": "setup", "callSid": "CA123", "customParameters": {}})
+        ws.send_json(_speaking(relay.CLIENT_SPEAKING, True))
+        started = time.monotonic()
+        time.sleep(talking)
+        ws.send_json(_speaking(relay.CLIENT_SPEAKING, False))
+
+        assert ws.receive_json()["token"] == relay.STILL_THERE
+        assert time.monotonic() - started >= talking
+
+
+def test_end_waits_for_the_goodbye_to_finish_playing(monkeypatch):
+    """`end` follows the agent-stop event, not a fixed sleep — so it lands
+    when the audio actually ends instead of after a guess."""
+    _stub_capture_and_notify(monkeypatch)
+    _fast_silence(monkeypatch)
+    # Long enough that a fallback-driven hangup would be unmistakable.
+    monkeypatch.setattr(settings, "end_grace_seconds", 30.0)
+
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"type": "setup", "callSid": "CA123", "customParameters": {}})
+        assert ws.receive_json()["token"] == relay.STILL_THERE
+        assert "Goodbye" in ws.receive_json()["token"]
+
+        # The goodbye is playing. Nothing may be sent until it's done.
+        ws.send_json(_speaking(relay.AGENT_SPEAKING, True))
+        time.sleep(0.2)
+        ws.send_json(_speaking(relay.AGENT_SPEAKING, False))
+        started = time.monotonic()
+
+        end = ws.receive_json()
+
+    assert end["type"] == "end"
+    assert json.loads(end["handoffData"])["reasonCode"] == "caller-silent"
+    assert time.monotonic() - started < 5.0  # not the 30s fallback
+
+
+def test_unreadable_speaker_event_is_ignored(monkeypatch):
+    """The shapes aren't documented by Twilio. A value we can't read must not
+    be coerced into a state change — silence detection still has to work."""
+    _stub_capture_and_notify(monkeypatch)
+    _fast_silence(monkeypatch)
+
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"type": "setup", "callSid": "CA123", "customParameters": {}})
+        ws.send_json({"type": "info", "name": "agentSpeaking", "value": "???"})
+        ws.send_json({"type": "info", "name": "tokensPlayed", "value": "Hi there"})
+
+        assert ws.receive_json()["token"] == relay.STILL_THERE
+
+
+def test_stale_agent_speaking_flag_expires(monkeypatch):
+    """A dropped agentSpeaking=off must not hold the call open forever."""
+    _stub_capture_and_notify(monkeypatch)
+    _fast_silence(monkeypatch)
+    monkeypatch.setattr(relay, "MAX_AGENT_SPEECH_SECONDS", 0.1)
+
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"type": "setup", "callSid": "CA123", "customParameters": {}})
+        ws.send_json(_speaking(relay.AGENT_SPEAKING, True))  # no matching "off"
+
+        assert ws.receive_json()["token"] == relay.STILL_THERE
+
+
+def test_barge_in_cancels_the_reply_and_the_call_continues(monkeypatch):
+    """An interrupt ends agent speech even if the agent-stop event is lost, so
+    the clock restarts and the next thing the caller says still gets a turn."""
+    _stub_capture_and_notify(monkeypatch)
+    _fast_silence(monkeypatch)
+    released = asyncio.Event()
+
+    async def fake_stream(system, messages_):
+        yield "Let me tell you "
+        await released.wait()  # never — the turn is cancelled first
+        yield "the rest."
+
+    monkeypatch.setattr(llm, "stream_reply", fake_stream)
+
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"type": "setup", "callSid": "CA123", "customParameters": {}})
+        ws.send_json({"type": "prompt", "voicePrompt": "tell me"})
+        ws.send_json(_speaking(relay.AGENT_SPEAKING, True))
+        ws.send_json({"type": "interrupt", "utteranceUntilInterrupt": "Let me"})
+
+        # Whatever of the reply had already gone out stops there — the rest of
+        # the stream is never spoken.
+        spoken = []
+        while True:
+            token = ws.receive_json()["token"]
+            # No agentSpeaking=off is sent: the interrupt alone has to clear
+            # it, or the call sits non-idle forever and never nudges again.
+            if token == relay.STILL_THERE:
+                break
+            spoken.append(token)
+
+    assert "the rest." not in "".join(spoken)
+
+
+def test_caller_hangup_still_sends_the_sms(monkeypatch):
+    """The caller drops mid-call: finalize still runs off the disconnect."""
+    sent = _stub_capture_and_notify(monkeypatch)
+
+    async def fake_stream(system, messages_):
+        yield "Got it."
+
+    monkeypatch.setattr(llm, "stream_reply", fake_stream)
+
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"type": "setup", "callSid": "CA123", "customParameters": {}})
+        ws.send_json({"type": "prompt", "voicePrompt": "Jane, about Saturday"})
+        while not ws.receive_json()["last"]:
+            pass
+        ws.close()  # hang up without a goodbye
+
+    assert len(sent) == 1
+    assert "Missed call" in sent[0]  # capture stub returns no message
 
 
 def test_capture_assembles_message(monkeypatch):

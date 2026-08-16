@@ -25,6 +25,7 @@ def bot_answers() -> Response:
             GREETING,
             settings.tts_provider,
             settings.tts_voice,
+            settings.relay_events,
         )
     )
 
@@ -59,10 +60,10 @@ def after_dial(DialCallStatus: str = Form(...)) -> Response:
 
 @app.websocket("/ws")
 async def ws(websocket: WebSocket) -> None:
-    """ConversationRelay turn loop. The greeting is passed through so the relay
-    knows how long Twilio will be speaking it, and doesn't mistake it for the
-    caller sitting silent."""
-    await handle_relay(websocket, GREETING)
+    """ConversationRelay turn loop. The greeting isn't passed through — Twilio
+    speaks it and reports its start and stop like any other utterance, so the
+    relay doesn't need to know its text to keep it out of the silence clock."""
+    await handle_relay(websocket)
 
 
 @app.post("/voice/handoff")
