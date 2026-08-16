@@ -1,14 +1,6 @@
-"""What the bot says: the opening line, and the system prompt behind the rest.
-
-The greeting lives here rather than next to the web routes because the prompt
-has to tell the model what the caller has already heard. If those two drift
-apart the bot re-introduces itself, or asks a second time for something the
-greeting already asked for.
-"""
-
 GREETING = (
-    "Hi, this is Jace, Steve's assistant. He's not available right now, "
-    "but I'd be glad to take a message. Who's this?"
+    "Hi, this is Mity, Steve's AI assistant. He's not available right now, "
+    "but I'd be glad to take a message. Who is this I am speaking with?"
 )
 
 
