@@ -8,8 +8,8 @@ from app.twiml import connect_relay, dial_then_bot, hangup
 app = FastAPI(title="firstsignal-voice")
 
 GREETING = (
-    "Hi, you've reached Steve's line. He's not available right now, "
-    "but I can take a message. Who's calling?"
+    "Hi, this is Jace, Steve's assistant. He's not available right now. "
+    "But I can take a message. Who's calling?"
 )
 
 
