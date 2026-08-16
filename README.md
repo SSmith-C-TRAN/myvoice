@@ -12,7 +12,7 @@ Built on Twilio ConversationRelay + FastAPI. See the full plan for the roadmap.
 - [x] **Step 2 — Dial-through.** `/voice` rings the cell; `/voice/after-dial` falls through when unanswered.
 - [x] **Step 3 — Relay echo bot.** Missed calls hand off to `/ws`, which echoes what the caller says.
 - [x] **Step 4 — LLM turn loop.** `/ws` streams Claude Haiku 4.5 replies token by token; barge-in cancels the in-flight turn.
-- [ ] Step 5 — Capture + notify
+- [x] **Step 5 — Capture + notify.** At call end the transcript is distilled into a structured message and texted to your cell via Twilio.
 - [ ] Step 6 — Harden
 - [ ] Step 7 — Call log (optional)
 
@@ -23,8 +23,13 @@ Built on Twilio ConversationRelay + FastAPI. See the full plan for the roadmap.
 | GET    | `/healthz`          | Health check for App Platform.                            |
 | POST   | `/voice`            | Number's voice webhook. Dials your cell (15s timeout).    |
 | POST   | `/voice/after-dial` | Dial callback. `completed` → hang up; else → connect bot. |
-| WS     | `/ws`               | ConversationRelay turn loop. Streams Claude's replies.    |
+| WS     | `/ws`               | ConversationRelay turn loop. Streams Claude's replies, then captures the message and texts it to you. |
 | POST   | `/voice/handoff`    | Relay session ended. Hangs up.                            |
+
+At call end (the bot wraps up and ends the call, or the caller hangs up), the
+transcript is distilled into a structured message — name, callback number,
+reason, urgency — and texted to `NOTIFY_SMS_TO`. Requires a **SMS-capable**
+Twilio number in `TWILIO_FROM_NUMBER`.
 
 The **carrier voicemail race**: keep `DIAL_TIMEOUT` at 15s and disable/delay
 carrier voicemail on the cell so Twilio's no-answer fallback wins.
@@ -63,6 +68,10 @@ Copy `.env.example` to `.env`. Steps 1–2 only need:
 | `ANTHROPIC_API_KEY`| —              | Required from step 4 on for the bot to talk.          |
 | `LLM_PRIMARY`      | `claude-haiku-4-5` | Voice model. Reasoning stays off for low latency. |
 | `LLM_MAX_TOKENS`   | `200`          | Cap per reply — replies are spoken, so keep them short. |
+| `TWILIO_ACCOUNT_SID` | —            | Twilio auth for sending the summary SMS.              |
+| `TWILIO_AUTH_TOKEN`  | —            | Twilio auth for sending the summary SMS.              |
+| `TWILIO_FROM_NUMBER` | —            | SMS-capable Twilio number the summary is sent from.   |
+| `NOTIFY_SMS_TO`    | `+18084649192` | Where the summary text is delivered.                  |
 
 ## Deploy — DigitalOcean App Platform
 

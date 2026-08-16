@@ -20,7 +20,21 @@ services:
         value: "sparkal.ai"
       - key: LLM_PRIMARY
         value: "claude-haiku-4-5"
+      - key: NOTIFY_SMS_TO
+        value: "+18084649192"
       - key: ANTHROPIC_API_KEY
         scope: RUN_TIME
         type: SECRET
         value: "" # set in the App Platform dashboard, not committed
+      - key: TWILIO_ACCOUNT_SID
+        scope: RUN_TIME
+        type: SECRET
+        value: ""
+      - key: TWILIO_AUTH_TOKEN
+        scope: RUN_TIME
+        type: SECRET
+        value: ""
+      - key: TWILIO_FROM_NUMBER
+        scope: RUN_TIME
+        type: SECRET
+        value: ""

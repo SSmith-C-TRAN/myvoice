@@ -3,3 +3,4 @@ uvicorn[standard]==0.34.0
 pydantic-settings==2.7.1
 python-multipart==0.0.20
 anthropic==0.122.0
+twilio==9.11.0

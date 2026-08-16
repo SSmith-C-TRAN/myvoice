@@ -7,12 +7,16 @@ which is what a real-time voice turn needs.
 """
 
 from collections.abc import AsyncIterator
+from typing import TypeVar
 
 from anthropic import AsyncAnthropic
+from pydantic import BaseModel
 
 from app.config import settings
 
 _client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+
+T = TypeVar("T", bound=BaseModel)
 
 
 async def stream_reply(
@@ -27,3 +31,20 @@ async def stream_reply(
     ) as stream:
         async for text in stream.text_stream:
             yield text
+
+
+async def extract(system: str, user: str, schema: type[T]) -> T:
+    """One-shot structured extraction into the given pydantic model.
+
+    Non-streaming; reasoning stays off (Haiku 4.5 does none by default). The
+    model class stays a caller argument so this interface has no dependency on
+    the message shapes it fills — swapping providers stays confined here.
+    """
+    response = await _client.messages.parse(
+        model=settings.llm_primary,
+        max_tokens=settings.llm_max_tokens,
+        system=system,
+        messages=[{"role": "user", "content": user}],
+        output_format=schema,
+    )
+    return response.parsed_output

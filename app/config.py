@@ -18,5 +18,11 @@ class Settings(BaseSettings):
     llm_primary: str = "claude-haiku-4-5"
     llm_max_tokens: int = 200  # replies are spoken, so keep them short
 
+    # Notify (step 5). Text the message summary to your cell via Twilio.
+    twilio_account_sid: str = ""
+    twilio_auth_token: str = ""
+    twilio_from_number: str = ""  # your Twilio number, E.164 — must be SMS-capable
+    notify_sms_to: str = "+18084649192"
+
 
 settings = Settings()

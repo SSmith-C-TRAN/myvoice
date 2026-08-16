@@ -54,6 +54,16 @@ async def main() -> None:
                         break
             print("\n")
 
+            # The bot may end the call itself (end-session) right after the turn.
+            # Stand in for Twilio: close the socket so the server finalizes.
+            try:
+                nxt = json.loads(await asyncio.wait_for(ws.recv(), timeout=1.0))
+                if nxt.get("type") == "end-session":
+                    print("[bot ended the call — hanging up]")
+                    break
+            except asyncio.TimeoutError:
+                pass
+
 
 if __name__ == "__main__":
     try:
